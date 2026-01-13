@@ -57,7 +57,7 @@ func (p *IsardProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
 				MarkdownDescription: "EndPoint of the Isard VDI Server",
-				Optional:            false,
+				Required:            true,
 			},
 			"token": schema.StringAttribute{
 				MarkdownDescription: "Authentication token for API access",
