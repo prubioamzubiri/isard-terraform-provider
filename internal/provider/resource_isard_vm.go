@@ -6,6 +6,8 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/tknika/terraform-provider-isard/internal/client"
 )
@@ -28,9 +30,12 @@ type vmResource struct {
 
 // vmResourceModel maps the resource schema data.
 type vmResourceModel struct {
-	ID         types.String `tfsdk:"id"`
-	Name       types.String `tfsdk:"name"`
-	TemplateID types.String `tfsdk:"template_id"`
+	ID          types.String  `tfsdk:"id"`
+	Name        types.String  `tfsdk:"name"`
+	Description types.String  `tfsdk:"description"`
+	TemplateID  types.String  `tfsdk:"template_id"`
+	VCPUs       types.Int64   `tfsdk:"vcpus"`
+	Memory      types.Float64 `tfsdk:"memory"`
 }
 
 // Metadata returns the resource type name.
@@ -41,19 +46,37 @@ func (r *vmResource) Metadata(_ context.Context, req resource.MetadataRequest, r
 // Schema defines the schema for the resource.
 func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Gestiona una máquina virtual en Isard VDI.",
+		Description: "Gestiona un persistent desktop en Isard VDI.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Identificador único de la máquina virtual",
+				MarkdownDescription: "Identificador único del desktop",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Nombre de la máquina virtual",
+				MarkdownDescription: "Nombre del desktop (mínimo 4 caracteres, máximo 50)",
+			},
+			"description": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Descripción del desktop (máximo 255 caracteres)",
 			},
 			"template_id": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "ID de la plantilla a utilizar para crear la máquina virtual",
+				MarkdownDescription: "ID de la plantilla a utilizar para crear el desktop",
+			},
+			"vcpus": schema.Int64Attribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "N\u00famero de CPUs virtuales (por defecto usa el del template)",
+			},
+			"memory": schema.Float64Attribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Memoria RAM en GB (por defecto usa la del template)",
 			},
 		},
 	}
@@ -79,7 +102,7 @@ func (r *vmResource) Configure(_ context.Context, req resource.ConfigureRequest,
 	r.client = client
 }
 
-// Create creates a new resource.
+	// Create creates a new resource.
 func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan vmResourceModel
 	diags := req.Plan.Get(ctx, &plan)
@@ -88,17 +111,54 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		return
 	}
 
-	// 1. Usar r.client para crear el recurso en la API
-	// item, err := r.client.CreateSomething(plan.Name.ValueString())
-	// if err != nil {
-	//     resp.Diagnostics.AddError("Error creating resource", err.Error())
-	//     return
-	// }
+	// Preparar hardware personalizado si se especifica
+	var vcpus *int64
+	var memory *float64
+	
+	if !plan.VCPUs.IsNull() && !plan.VCPUs.IsUnknown() {
+		v := plan.VCPUs.ValueInt64()
+		vcpus = &v
+	}
+	
+	if !plan.Memory.IsNull() && !plan.Memory.IsUnknown() {
+		m := plan.Memory.ValueFloat64()
+		memory = &m
+	}
 
-	// 2. Actualizar el plan con el ID devuelto por la API
-	// plan.ID = types.StringValue(item.ID)
+	// Crear el persistent desktop usando la API
+	desktopID, err := r.client.CreatePersistentDesktop(
+		plan.Name.ValueString(),
+		plan.Description.ValueString(),
+		plan.TemplateID.ValueString(),
+		vcpus,
+		memory,
+	)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error creando el persistent desktop",
+			fmt.Sprintf("No se pudo crear el desktop: %s", err.Error()),
+		)
+		return
+	}
 
-	// 3. Escribir el estado
+	// Actualizar el plan con el ID devuelto por la API
+	plan.ID = types.StringValue(desktopID)
+
+	// Obtener los valores finales del desktop creado (incluyendo valores por defecto)
+	desktop, err := r.client.GetDesktop(desktopID)
+	if err == nil {
+		if desktop.Description != "" {
+			plan.Description = types.StringValue(desktop.Description)
+		}
+		if desktop.VCPUs > 0 {
+			plan.VCPUs = types.Int64Value(desktop.VCPUs)
+		}
+		if desktop.Memory > 0 {
+			plan.Memory = types.Float64Value(desktop.Memory)
+		}
+	}
+
+	// Escribir el estado
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
 }
@@ -112,16 +172,33 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 		return
 	}
 
-	// 1. Usar r.client para leer el recurso de la API
-	// item, err := r.client.GetSomething(state.ID.ValueString())
-	// if err != nil {
-	//     // Si es 404, eliminar del estado: resp.State.RemoveResource(ctx)
-	//     resp.Diagnostics.AddError("Error reading resource", err.Error())
-	//     return
-	// }
+	// Obtener el desktop de la API
+	desktop, err := r.client.GetDesktop(state.ID.ValueString())
+	if err != nil {
+		// Si el desktop no existe (404), eliminarlo del estado
+		if err.Error() == "desktop not found" {
+			resp.State.RemoveResource(ctx)
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Error leyendo el desktop",
+			fmt.Sprintf("No se pudo leer el desktop (ID: %s): %s", state.ID.ValueString(), err.Error()),
+		)
+		return
+	}
 
-	// 2. Actualizar el estado con los valores de la API
-	// state.Name = types.StringValue(item.Name)
+	// Actualizar el estado con los valores de la API
+	state.Name = types.StringValue(desktop.Name)
+	state.Description = types.StringValue(desktop.Description)
+	state.TemplateID = types.StringValue(desktop.TemplateID)
+	
+	// Actualizar hardware si está disponible
+	if desktop.VCPUs > 0 {
+		state.VCPUs = types.Int64Value(desktop.VCPUs)
+	}
+	if desktop.Memory > 0 {
+		state.Memory = types.Float64Value(desktop.Memory)
+	}
 
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)
@@ -153,7 +230,15 @@ func (r *vmResource) Delete(ctx context.Context, req resource.DeleteRequest, res
 		return
 	}
 
-	// 1. Usar r.client para eliminar el recurso
-	// err := r.client.DeleteSomething(state.ID.ValueString())
-	// if err != nil { ... }
+	// Eliminar el desktop usando la API
+	err := r.client.DeleteDesktop(state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error eliminando la máquina virtual",
+			fmt.Sprintf("No se pudo eliminar la VM (ID: %s): %s", state.ID.ValueString(), err.Error()),
+		)
+		return
+	}
+
+	// El estado se elimina automáticamente si la función termina sin errores
 }
