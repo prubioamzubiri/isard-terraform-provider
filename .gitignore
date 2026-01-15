@@ -47,7 +47,7 @@ override.tf.json
 dist/
 
 # test files
-*.tf
+provider.tf
 *.tfplan
 
 terraform-provider-isard
