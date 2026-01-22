@@ -18,6 +18,7 @@ Provider de Terraform para gestionar recursos en Isard VDI a través de su API v
 
 - ✅ **isard_templates** - Listado de templates disponibles con filtrado por nombre
 - ✅ **isard_network_interfaces** - Consulta de interfaces de red del sistema con filtros avanzados
+- ✅ **isard_groups** - Consulta de grupos del sistema con filtrado por nombre y categoría
 
 ### Autenticación
 
@@ -86,6 +87,11 @@ data "isard_templates" "ubuntu" {
   name_filter = "Ubuntu"
 }
 
+# Obtener grupos por nombre
+data "isard_groups" "desarrollo" {
+  name_filter = "Desarrollo"
+}
+
 # Crear un desktop persistente
 resource "isard_vm" "mi_desktop" {
   name        = "mi-desktop-terraform"
@@ -105,7 +111,7 @@ resource "isard_deployment" "equipo_dev" {
   memory = 8.0
 
   allowed {
-    groups = ["dev-group-uuid"]
+    groups = [data.isard_groups.desarrollo.groups[0].id]
   }
 }
 
@@ -166,7 +172,8 @@ resource "isard_vm" "vm_custom" {
 ### Data Sources
 
 - [Data Source: isard_templates](docs/data-sources/isard_templates.md) - Consulta de templates
-- [Data Source: isard_network_interfaces](data-sources/isard_network_interfaces.md) - Consulta de interfaces
+- [Data Source: isard_network_interfaces](docs/data-sources/isard_network_interfaces.md) - Consulta de interfaces
+- [Data Source: isard_groups](docs/data-sources/isard_groups.md) - Consulta de grupos
 
 ## Ejemplos
 
