@@ -165,5 +165,6 @@ func (p *IsardProvider) DataSources(_ context.Context) []func() datasource.DataS
 	return []func() datasource.DataSource{
 		NewTemplatesDataSource,
 		NewNetworkInterfacesDataSource,
+		NewGroupsDataSource,
 	}
 }
