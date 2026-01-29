@@ -103,25 +103,30 @@ func (c *Client) CreateDeployment(
 	if isos, ok := templateHardware["isos"]; ok {
 		hardware["isos"] = isos
 	}
-	if _, ok := templateHardware["video"]; ok {
-		// Si el template tiene video singular, convertir a videos plural
+	
+	// Siempre incluir videos - requerido por la API
+	if videos, ok := templateHardware["videos"]; ok {
+		hardware["videos"] = videos
+	} else if video, ok := templateHardware["video"]; ok {
+		hardware["videos"] = video
+	} else {
 		hardware["videos"] = []string{"default"}
 	}
 
 	// vcpus y memory: usar valores especificados o del template
 	if vcpus != nil {
-		hardware["vcpus"] = *vcpus
+		hardware["vcpus"] = int(*vcpus)
 	} else if templateVCPUs, ok := templateHardware["vcpus"].(float64); ok {
-		hardware["vcpus"] = int64(templateVCPUs)
+		hardware["vcpus"] = int(templateVCPUs)
 	} else {
 		hardware["vcpus"] = 2
 	}
 	
 	if memory != nil {
-		hardware["memory"] = *memory
+		hardware["memory"] = int(*memory)
 	} else if templateMemory, ok := templateHardware["memory"].(float64); ok {
 		// Convertir de KiB a GB
-		hardware["memory"] = int64(templateMemory / 1024 / 1024)
+		hardware["memory"] = int(templateMemory / 1024 / 1024)
 	} else {
 		hardware["memory"] = 2
 	}
@@ -137,14 +142,24 @@ func (c *Client) CreateDeployment(
 	hardware["reservables"] = map[string]interface{}{"vgpus": []string{"None"}}
 	payload["hardware"] = hardware
 	
-	// guest_properties: usar valores especificados o del template
-	if len(guestProperties) > 0 {
-		payload["guest_properties"] = guestProperties
-	} else if templateGuestProps != nil {
-		payload["guest_properties"] = templateGuestProps
-	} else {
-		payload["guest_properties"] = map[string]interface{}{}
+	// guest_properties: combinar valores del template con los especificados
+	finalGuestProps := make(map[string]interface{})
+	
+	// Primero copiar del template si existe
+	if templateGuestProps != nil {
+		for k, v := range templateGuestProps {
+			finalGuestProps[k] = v
+		}
 	}
+	
+	// Luego sobrescribir/añadir con valores especificados
+	if len(guestProperties) > 0 {
+		for k, v := range guestProperties {
+			finalGuestProps[k] = v
+		}
+	}
+	
+	payload["guest_properties"] = finalGuestProps
 
 	// image: usar valores especificados o del template
 	if len(image) > 0 {
